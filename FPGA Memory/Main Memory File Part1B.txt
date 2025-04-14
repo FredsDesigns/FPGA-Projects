@@ -1,0 +1,94 @@
+--Code for part 1B:
+library ieee; use ieee.std_logic_1164.all;
+library lpm; use lpm.lpm_components.all;
+entity LAB7 is
+port (clk, clear: in std_logic;
+useqEnOut: out std_logic;
+pcSeg1, pcSeg2: out std_logic_vector(0 to 6);
+ctrlSignals: out std_logic_vector(0 to 7));
+end LAB7;
+architecture structural of LAB7 is
+-- add component declaration of lab7useq
+component lab7useq is
+generic (uROM_width: integer;
+uROM_file: string);
+port (opcode: in std_logic_vector(3 downto 0);
+uop: out std_logic_vector(1 to (uROM_width-9));
+debug_map_addr: out std_logic_vector(8 downto 0); -- for debugging
+enable, clear, clock: in std_logic);
+end component;
+-- add component declaration for seven-segment decoder
+component seven_segm is
+generic (n: positive:= 1);
+port( input: in std_logic_vector(n-1 downto 0);
+out1: out std_logic_vector(0 to 6));
+end component;
+signal useqEnable, useqClear: std_logic;
+signal uop: std_logic_vector(0 to 7);
+signal pcInc, pcLoad, pcClear: std_logic;
+signal pcOut: std_logic_vector(7 downto 0);
+begin
+delay: lpm_counter generic map(lpm_width=>2) port
+map(clock=>clk, cout=>useqEnable);
+useqClear <= clear;
+useqEnOut <= useqEnable;
+labelG: for i in 0 to 7 generate
+ctrlSignals(i) <= uop(i) and useqEnable;
+end generate;
+pcInc <= uop(0) and useqEnable;
+pcLoad <= uop(1) and useqEnable;
+pcClear <= uop(2) and useqEnable;
+-- add port map statement of S22lab7_useq, use the uROm Test file in
+the next
+Lab7useq_comp: Lab7useq
+generic map(uROM_width => 17,uROM_file => "MIF1B")
+port map(opcode => "0011", uop => uop, enable => useqEnable,
+clear => useqClear, clock => clk);
+-- add pc register, seven-segment display
+PC_Register: lpm_counter
+generic map(lpm_width => 8)
+port map(data => "10101010", sclr => pcClear, cnt_en => pcInc,
+sload => pcLoad, clock => clk, q => pcOut);
+S_add: seven_segm generic map(n => 4)
+port map(input => pcOut(3 downto 0), out1 => pcSeg1);
+S_add2: seven_segm generic map(n=>4)
+port map(input => pcOut(7 downto 4), out1 => pcSeg2);
+end structural;
+
+--seven_segm
+library IEEE;
+use IEEE.std_logic_1164.all;
+use ieee.std_logic_arith.all;
+use ieee.std_logic_unsigned.all;
+entity seven_segm is
+generic (n: positive := 1);
+port (input: in std_logic_vector(n-1 downto 0);
+out1: out std_logic_vector(0 to 6));
+end seven_segm;
+architecture behavior of seven_segm is
+begin
+process (input)
+variable count: integer range 0 to 15;
+begin
+count:= conv_integer(input);
+case count is
+when 0 => out1 <= "0000001";
+when 1 => out1 <= "1001111";
+when 2 => out1 <= "0010010";
+when 3 => out1 <= "0000110";
+when 4 => out1 <= "1001100";
+when 5 => out1 <= "0100100";
+when 6 => out1 <= "0100000";
+when 7 => out1 <= "0001111";
+when 8 => out1 <= "0000000";
+when 9 => out1 <= "0000100";
+when 10=> out1 <= "0001000";
+when 11=> out1 <= "1100000";
+when 12=> out1 <= "0110001";
+when 13=> out1 <= "1000010";
+when 14=> out1 <= "0110000";
+when 15=> out1 <= "0111000";
+when others => out1 <= "1111111";
+end case;
+end process;
+end behavior;

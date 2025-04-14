@@ -1,0 +1,62 @@
+--Code for part 2:
+library ieee; use ieee.std_logic_1164.all;
+library lpm; use lpm.lpm_components.all;
+entity ece495_lab_7_part2_g04 is
+port (clk, clear: in std_logic;
+useqEnOut: out std_logic;
+marData: in std_logic_vector(7 downto 0); --- connected to switches, input to
+MAR
+marSeg1, marSeg2, mdrSeg1, mdrSeg2: out std_logic_vector(0 to 6);
+ctrlSignals: out std_logic_vector(0 to 7));
+end ece495_lab_7_part2_g04;
+architecture structural of ece495_lab_7_part2_g04 is
+component lab7useq is
+generic (uROM_width: positive;
+uROM_file: string);
+port (opcode: in std_logic_vector(3 downto 0);
+uop: out std_logic_vector(1 to (uROM_width-9));
+enable, clear: in std_logic;
+clock: in std_logic);
+end component lab7useq;
+component seven_segment is
+port (c: IN STD_LOGIC_VECTOR(3 downto 0);
+segms: OUT STD_LOGIC_VECTOR (0 to 6));
+end component seven_segment;
+signal useqEnable, useqClear: std_logic;
+--signal uop: std_logic_vector(0 to 7);
+signal marLoad, mdrLoad, memWE: std_logic;
+signal uuop: std_logic_vector(0 to 7);
+signal oopcode: std_logic_vector(3 downto 0);
+signal marOut,memOut,mdrOut: std_logic_vector(7 downto 0);
+begin
+delay: lpm_counter generic map(lpm_width=>2) port map(clock=>clk,
+cout=>useqEnable);
+useqClear <= clear;
+useqEnOut <= useqEnable;
+labelG: for i in 0 to 7 generate
+ctrlSignals(i) <= uuop(i) and useqEnable;
+end generate;
+marLoad <= uuop(0) and useqEnable;
+mdrLoad <= uuop(1) and useqEnable;
+memWE <= uuop(2) and useqEnable;
+oopcode <= "0011";
+useq: lab7useq generic map(uRoM_width => 17, uRoM_file => "MIF2") port
+map(opcode => oopcode, uop => uuop, enable => useqEnable, clear =>
+useqClear, clock => clk);
+mar: lpm_ff generic map (lpm_width=>8) port map (clock=>clk,
+data=>marData, q=>marOut, enable => marLoad);
+ram: lpm_ram_dq
+generic map (LPM_WIDTH => 8, LPM_WIDTHAD => 8, LPM_FILE =>
+"RAM")
+port map (address => marOut, inclock => clk, data => mdrOut, we =>
+memWE , q => memOut);
+mdr: lpm_ff generic map (lpm_width => 8) port map (clock=>clk,
+data=>memOut, q=>mdrOut, enable => mdrLoad);
+seg1: seven_segment port map(c=>marOut(3 downto 0), segms=>
+marSeg1);
+seg2: seven_segment port map(c=>marOut(7 downto 4), segms=>
+marSeg2);
+seg3: seven_segment port map(c=>mdrOut(3 downto 0), segms=>
+mdrSeg1);
+seg4: seven_segment port map(c=>mdrOut(7 downto 4), segms=>
+mdrSeg2);
