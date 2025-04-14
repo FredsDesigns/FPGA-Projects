@@ -1,0 +1,192 @@
+--Main file
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity LAB6 is
+port (SW: in std_logic_vector(17 downto 0);
+seg0, seg1, seg2: out std_logic_vector(0 to 6));
+end LAB6;
+architecture behavior of LAB6 is
+component p_adder
+generic(n:positive);
+port(a,b: in std_logic_vector((n-1) downto 0);
+c_in: in std_logic;
+sum: out std_logic_vector((n-1) downto 0);
+c_out: out std_logic);
+end component;
+component hex
+port(bin:in std_logic_vector(3 downto 0);
+hexi: out std_logic_vector(0 to 6));
+end component;
+signal a,b: std_logic_vector(7 downto 0);
+signal c_out: std_logic;
+signal c_in: std_logic;
+signal sum: std_logic_vector(7 downto 0);
+signal c_out_hex: std_logic_vector(3 downto 0);
+signal hex0, hex1: std_logic_vector(3 downto 0);
+begin
+a <= SW(16 downto 9);
+b <= SW(8 downto 1);
+c_in <= SW(0);
+c_out_hex <= (0=>c_out, others => ‘0’);
+p1: p_adder generic map (n => 8) port map (a => a, b => b, c_in => c_in, c_out =>
+c_out, sum => sum);
+hex0 <= sum (3 downto 0);
+hex1 <= sum (7 downto 4);
+h1: hex port map (bin => hex0, hexi => seg0);
+h2: hex port map (bin => hex1, hexi => seg1);
+h3: hex port map (bin => c_out_hex, hexi => seg2);
+end behavior;
+
+--P adder code
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity p_adder is
+generic(n:positive);
+port(a,b: in std_logic_vector((n-1) downto 0);
+c_in: in std_logic;
+sum: out std_logic_vector((n-1) downto 0);
+c_out: out std_logic);
+end p_adder;
+architecture adding of p_adder is
+component full_adder
+port (a,b,c_in: in std_logic;
+sum, c_out: out std_logic);
+end component;
+signal c_int: std_logic_vector((n) downto 0) := (0 => c_in, others => ‘0’);
+begin
+gen: for i in 0 to (n-1) generate
+t1:full_adder port map (sum => sum(i), c_out => c_int(i+1), a => a(i), b = b(i), c_in =>
+c_int(i));
+end generate;
+c_out <= c_int(n);
+end adding;
+
+--Full adder code
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity full_adder is
+port (a, b, c_in: in std_logic;
+sum, c_out: out std_logic);
+end full_adder;
+architecture dataflow of full_adder is
+begin
+sum <= a xor b xor c_in;
+c_out <= ((a xor b) and c_in) or (a and b);
+end dataflow;
+
+--Code for hex assignment
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity hex is
+port(bin: in std_logic_vector(3 downto 0);
+hexi: out std_logic_vector(0 to 6));
+end hex;
+architecture math of hex is
+begin
+process(bin)
+begin
+case bin is
+when “0000” => hexi <= “0000001”;
+when “0001” => hexi <= “1001111”;
+when “0010” => hexi <= “0010010”;
+when “0011” => hexi <= “0000110”;
+when “0100” => hexi <= “1001100”;
+when “0101” => hexi <= “0100100”;
+when “0110” => hexi <= “0100000”;
+when “0111” => hexi <= “0001111”;
+when “1000” => hexi <= “0000000”;
+when “1001” => hexi <= “0001100”;
+when “1010” => hexi <= “0001000”;
+when “1011” => hexi <= “1100000”;
+when “1100” => hexi <= “0110001”;
+when “1101” => hexi <= “1000010”;
+when “1110” => hexi <= “0110000”;
+when “1111” => hexi <= “0111000”;
+end case;
+end process;
+end math;
+
+Code for part 2:
+--Main file for part 2
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity LAB6 is
+port(SW: in std_logic_vector(17 downto 0);
+seg0, seg1, seg2: out std_logic_vector(0 to 6));
+end LAB6;
+architecture behavior of LAB6 is
+component tc_add_sub
+generic(n:positive);
+port(a,b: in std_logic_vector((n-1) downto 0);
+sel: in std_logic;
+sum: out std_logic_vector((n-1) downto 0);
+overflow: out std_logic);
+end component;
+component hex
+port (bin: in std_logic_vector(3 downto 0);
+hexi: out std_logic_vector(0 to 6));
+end component;
+signal a,b: std_logic_vector(7 downto 0);
+signal c_out: std_logic;
+signal c_in: std_logic;
+signal sum: std_logic_vector(7 downto 0);
+signal c_out_hex: std_logic_vector(3 downto 0);
+signal hex0, hex1: std_logic_vector(3 downto 0);
+begin
+a <= SW(16 downto 9);
+b <= SW(8 downto 1);
+c_in <= SW(0);
+c_out_hex <= (0=>c_out, others=>’0’);
+p1: tc_add_sub generic map (n => 8) port map (a => a, b => b, sel => c_in, sum => sum,
+overflow => c_out);
+hex0 <= sum(3 downto 0);
+hex1 <= sum(7 downto 4);
+h1: hex port map (bin => hex0, hexi => seg0);
+h2: hex port map (bin => hex1, hexi => seg1);
+h3: hex port map (bin => c_out_hex, hexi => seg2);
+end behavior;
+
+--tc_add_sub code
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+entity tc_add_sub is
+generic (n: positive);
+port (a,b: in std_logic_vector((n-1) downto 0);
+sel: in std_logic;
+sum: out std_logic_vector((n-1) downto 0);
+overflow: out std_logic);
+end tc_add_sub;
+architecture behavior of tc_add_sub is
+component p_adder
+generic(n:positive);
+port(a,b: in std_logic_vector((n-1) downto 0);
+c_in: in std_logic;
+sum: out std_logic_vector((n-1) downto 0);
+c_out: out std_logic);
+end component
+signal T, bT, sumT: std_logic_vector((n-1) downto 0);
+signal c_out, c: std_logic;
+signal c_in: std_logic := ‘0’;
+signal temp: std_logic_vector((n-1) downto 0);
+begin
+twos: p_adder generic map (n => n) port map (a => temp, b => T, c_in => c_in, c_out =>
+c, sum => bT);
+p1: p_adder generic map (n => n), port map (a => a, b => bT, c_in => c_in, c_out =>
+c_out, sum => sumT);
+process (a, b, sel)
+begin
+if (sel = ‘0’) then
+temp <= (others => ‘0’);
+T <= b;
+else
+T <= not b;
+temp <= (0 => ‘1’, others => ‘0’);
+end if;
+end process;
+process (a, b, sumT)
+begin
+overflow <= (a(n-1) xor sumT(n-1)) and (bT(n-1) xor sumT(n-1));
+sum <= sumT;
+end process;
+end behavior;
+Code from P-adder and Full-adder was reused from part 1.
