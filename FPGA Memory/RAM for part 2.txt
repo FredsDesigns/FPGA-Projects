@@ -1,0 +1,11 @@
+-- RAM Test File for part 2
+--
+WIDTH=8;
+DEPTH=256;
+ADDRESS_RADIX=HEX;
+DATA_RADIX=HEX;
+CONTENT BEGIN
+[0..FF] : 0;
+54: FC;
+55: DD;
+END;

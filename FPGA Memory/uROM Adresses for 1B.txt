@@ -1,0 +1,20 @@
+-- uROM Test File for part 1B
+-- 8-bit control signals
+WIDTH=17;
+DEPTH=256;
+ADDRESS_RADIX=HEX;
+DATA_RADIX=BIN;
+CONTENT BEGIN
+[0..FF]: 00000000000000000;
+-- uop
+-- 01234567M01234567
+00: 00000000000000001; -- control signal = 00000000, next address = 0x01
+01: 00100001000000010; -- control signal = 00100001, next address = 0x02, clear PC, PC = 0x00
+02: 10000010000000011; -- control signal = 10000010, next address = 0x03, inc PC, PC = 0x01
+03: 10000011000000100; -- control signal = 10000011, next address = 0x04, inc PC, PC = 0x02
+04: 00000100100000000; -- control signal = 00000100, use MAP, go to address 0x30
+30: 01000101000110001; -- control signal = 01000101, next address = 0x31, load PC, PC = 0xAA
+31: 00000110000110010; -- control signal = 00000110, next address = 0x32
+32: 10000111000110011; -- control signal = 10000111, next address = 0x33, inc PC, PC = 0xAB
+33: 00001000000000001; -- control signal = 00001000, next address = 0x01,
+END;
