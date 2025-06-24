@@ -1,0 +1,415 @@
+module eeprom_spi_controller (
+    // System signals
+    input  logic        clk,            // 100MHz system clock
+    input  logic        reset,          // Reset button
+    input  logic [7:0]  switches,       // SW[7:0] for data input
+    input  logic        btn_store,      // Store current input
+    input  logic        btn_execute,    // Execute SPI transaction
+    
+    // SPI Interface to EEPROM
+    output logic        spi_cs,         // Chip Select (active high for AT93C46D)
+    output logic        spi_clk,        // SPI Clock
+    output logic        spi_mosi,       // Master Out Slave In
+    input  logic        spi_miso,       // Master In Slave Out
+    
+    // Status outputs
+    output logic [7:0]  leds,           // Show current address
+    output logic [6:0]  seg7_display,   // 7-segment for data
+    output logic [3:0]  seg7_anode,     // 7-segment anodes
+    output logic        led_busy,       // Operation in progress
+    output logic        led_ready,      // Ready for input
+    output logic        led_error       // Error indicator
+);
+
+    // Input stages enumeration
+    typedef enum logic [2:0] {
+        INPUT_MODE,     // Waiting for mode input
+        INPUT_ADDR,     // Waiting for address input  
+        INPUT_DATA,     // Waiting for data input (WRITE only)
+        READY_TO_SEND,  // All inputs captured, ready to execute
+        EXECUTING       // SPI transaction in progress
+    } input_stage_t;
+    
+    // SPI state machine
+    typedef enum logic [3:0] {
+        SPI_IDLE,
+        SPI_START,
+        SPI_SEND_CMD,
+        SPI_READ_DATA,
+        SPI_WRITE_WAIT,
+        SPI_COMPLETE,
+        SPI_ERROR
+    } spi_state_t;
+    
+    input_stage_t current_input_stage, next_input_stage;
+    spi_state_t current_spi_state, next_spi_state;
+    
+    // Stored command components
+    logic [1:0]  stored_mode;           // 00=EWEN, 01=WRITE, 10=READ, 11=EWDS
+    logic [6:0]  stored_address;        // 7-bit address
+    logic [7:0]  stored_data;           // 8-bit data for write
+    logic [7:0]  read_data;             // Data read from EEPROM
+    
+    // SPI timing and control
+    logic [15:0] spi_clk_counter;       // Clock divider counter
+    logic        spi_clk_enable;        // SPI clock enable pulse
+    logic [4:0]  bit_counter;           // Current bit being transmitted
+    logic [4:0]  total_bits;            // Total bits to send/receive
+    logic [17:0] tx_shift_reg;          // Transmit shift register
+    logic [7:0]  rx_shift_reg;          // Receive shift register
+    logic        spi_clk_internal;      // Internal SPI clock
+    
+    // Button debouncing
+    logic [19:0] debounce_counter;
+    logic [19:0] input_debounce_counter;  // Separate counter for input stages
+    logic [1:0]  btn_store_sync;
+    logic [1:0]  btn_execute_sync;
+    logic        btn_store_edge;
+    logic        btn_execute_edge;
+    
+    //Display handling
+    logic display_sel; 
+    logic [3:0] current_digit;
+    logic [7:0] display_data;
+    
+    // Timing counters
+    logic [16:0] write_wait_counter;    // Write completion wait
+    logic [15:0] display_counter; //Used to multiplex displays
+    
+    //Display Multiplexing counter
+    always_ff @(posedge clk or posedge reset) begin
+        if(reset)
+        display_counter <= 16'd0;
+        else 
+        display_counter <= display_counter + 1'b1;
+    end
+    
+    assign display_select = display_counter[15];
+    
+    // 7-segment decoder for data display
+    function logic [6:0] decode_7seg(input logic [3:0] digit);
+        case (digit)
+            4'h0: return 7'b1000000; // 0
+            4'h1: return 7'b1111001; // 1
+            4'h2: return 7'b0100100; // 2
+            4'h3: return 7'b0110000; // 3
+            4'h4: return 7'b0011001; // 4
+            4'h5: return 7'b0010010; // 5
+            4'h6: return 7'b0000010; // 6
+            4'h7: return 7'b1111000; // 7
+            4'h8: return 7'b0000000; // 8
+            4'h9: return 7'b0010000; // 9
+            4'hA: return 7'b0001000; // A
+            4'hB: return 7'b0000011; // b
+            4'hC: return 7'b1000110; // C
+            4'hD: return 7'b0100001; // d
+            4'hE: return 7'b0000110; // E
+            4'hF: return 7'b0001110; // F
+            default: return 7'b1111111;
+        endcase
+    endfunction
+    
+    // Button synchronization and debouncing
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            btn_store_sync <= 2'b00;
+            btn_execute_sync <= 2'b00;
+            debounce_counter <= 20'd0;
+        end else begin
+            btn_store_sync <= {btn_store_sync[0], btn_store};
+            btn_execute_sync <= {btn_execute_sync[0], btn_execute};
+            
+            if (debounce_counter > 0)
+                debounce_counter <= debounce_counter - 1'b1;
+        end
+    end
+    
+    // Edge detection with debouncing
+    assign btn_store_edge = (btn_store_sync == 2'b01) && (debounce_counter == 0) && (input_debounce_counter == 0);
+    assign btn_execute_edge = (btn_execute_sync == 2'b01) && (debounce_counter == 0);
+    
+    // SPI Clock generation (100MHz -> ~1MHz for AT93C46D)
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            spi_clk_counter <= 16'd0;
+            spi_clk_enable <= 1'b0;
+            spi_clk_internal <= 1'b0;
+        end else begin
+            if (current_spi_state != SPI_IDLE) begin
+                if (spi_clk_counter >= 16'd49) begin  // 50 cycles = 1MHz
+                    spi_clk_counter <= 16'd0;
+                    spi_clk_enable <= 1'b1;
+                    spi_clk_internal <= ~spi_clk_internal;
+                end else begin
+                    spi_clk_counter <= spi_clk_counter + 1'b1;
+                    spi_clk_enable <= 1'b0;
+                end
+            end else begin
+                spi_clk_counter <= 16'd0;
+                spi_clk_enable <= 1'b0;
+                spi_clk_internal <= 1'b0;
+            end
+        end
+    end
+    
+    // Input stage state machine
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset)
+            current_input_stage <= INPUT_MODE;
+        else
+            current_input_stage <= next_input_stage;
+    end
+    
+    always_comb begin
+        next_input_stage = current_input_stage;
+        
+        case (current_input_stage)
+            INPUT_MODE: begin
+                if (btn_store_edge)
+                    next_input_stage = INPUT_ADDR;
+            end
+            
+            INPUT_ADDR: begin
+                if (btn_store_edge) begin
+                    if (stored_mode == 2'b01) // WRITE needs data
+                        next_input_stage = INPUT_DATA;
+                    else
+                        next_input_stage = READY_TO_SEND;
+                end
+            end
+            
+            INPUT_DATA: begin
+                if (btn_store_edge)
+                    next_input_stage = READY_TO_SEND;
+            end
+            
+            READY_TO_SEND: begin
+                if (btn_execute_edge)
+                    next_input_stage = EXECUTING;
+            end
+            
+            EXECUTING: begin
+                if (current_spi_state == SPI_COMPLETE || current_spi_state == SPI_ERROR)
+                    next_input_stage = INPUT_MODE;
+            end
+            
+            default: next_input_stage = INPUT_MODE;
+        endcase
+    end
+    
+    // Input capture logic
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            stored_mode <= 2'b00;
+            stored_address <= 7'h00;
+            stored_data <= 8'h00;
+            input_debounce_counter <= 20'd0;
+        end else begin
+            case (current_input_stage)
+                INPUT_MODE: begin
+                    if (btn_store_edge) begin
+                        stored_mode <= switches[1:0];
+                        input_debounce_counter <= 20'd1000000; // 10ms debounce
+                    end else if (input_debounce_counter > 0) begin
+                        input_debounce_counter <= input_debounce_counter - 1'b1;
+                    end
+                end
+                
+                INPUT_ADDR: begin
+                    if (btn_store_edge) begin
+                        stored_address <= switches[6:0];
+                        input_debounce_counter <= 20'd1000000;
+                    end else if (input_debounce_counter > 0) begin
+                        input_debounce_counter <= input_debounce_counter - 1'b1;
+                    end
+                end
+                
+                INPUT_DATA: begin
+                    if (btn_store_edge) begin
+                        stored_data <= switches[7:0];
+                        input_debounce_counter <= 20'd1000000;
+                    end else if (input_debounce_counter > 0) begin
+                        input_debounce_counter <= input_debounce_counter - 1'b1;
+                    end
+                end
+                
+                default: begin
+                    // Keep stored values, reset debounce counter
+                    input_debounce_counter <= 20'd0;
+                end
+            endcase
+        end
+    end
+    
+    // SPI state machine
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset)
+            current_spi_state <= SPI_IDLE;
+        else
+            current_spi_state <= next_spi_state;
+    end
+    
+    always_comb begin
+        next_spi_state = current_spi_state;
+        
+        case (current_spi_state)
+            SPI_IDLE: begin
+                if (current_input_stage == EXECUTING)
+                    next_spi_state = SPI_START;
+            end
+            
+            SPI_START: begin
+                next_spi_state = SPI_SEND_CMD;
+            end
+            
+            SPI_SEND_CMD: begin
+                if (spi_clk_enable && spi_clk_internal && (bit_counter >= total_bits)) begin
+                    if (stored_mode == 2'b10) // READ command
+                        next_spi_state = SPI_READ_DATA;
+                    else if (stored_mode == 2'b01) // WRITE command
+                        next_spi_state = SPI_WRITE_WAIT;
+                    else
+                        next_spi_state = SPI_COMPLETE;
+                end
+            end
+            
+            SPI_READ_DATA: begin
+                if (spi_clk_enable && spi_clk_internal && (bit_counter >= 5'd18))
+                    next_spi_state = SPI_COMPLETE;
+            end
+            
+            SPI_WRITE_WAIT: begin
+                if (write_wait_counter >= 17'd100000) // ~1ms wait
+                    next_spi_state = SPI_COMPLETE;
+            end
+            
+            SPI_COMPLETE: begin
+                next_spi_state = SPI_IDLE;
+            end
+            
+            default: next_spi_state = SPI_IDLE;
+        endcase
+    end
+    
+    // Command generation
+    always_comb begin
+        case (stored_mode)
+            2'b00: begin // EWEN (Enable Write)
+                tx_shift_reg = {1'b1, 2'b00, 2'b11, stored_address[4:0], 8'h00};
+                total_bits = 5'd10;
+            end
+            
+            2'b11: begin // EWDS (Disable Write)
+                tx_shift_reg = {1'b1, 2'b00, 2'b00, stored_address[4:0], 8'h00};
+                total_bits = 5'd10;
+            end
+            
+            2'b10: begin // READ
+                tx_shift_reg = {1'b1, 2'b10, stored_address, 8'h00};
+                total_bits = 5'd10;
+            end
+            
+            2'b01: begin // WRITE
+                tx_shift_reg = {1'b1, 2'b01, stored_address, stored_data};
+                total_bits = 5'd18;
+            end
+            
+            default: begin
+                tx_shift_reg = 18'h00000;
+                total_bits = 5'd0;
+            end
+        endcase
+    end
+    
+    // SPI control logic
+    always_ff @(posedge clk or posedge reset) begin
+        if (reset) begin
+            bit_counter <= 5'd0;
+            rx_shift_reg <= 8'h00;
+            read_data <= 8'h00;
+            write_wait_counter <= 17'd0;
+            spi_cs <= 1'b0;
+            spi_clk <= 1'b0;
+            spi_mosi <= 1'b0;
+        end else begin
+            case (current_spi_state)
+                SPI_IDLE: begin
+                    bit_counter <= 5'd0;
+                    write_wait_counter <= 17'd0;
+                    spi_cs <= 1'b0;
+                    spi_clk <= 1'b0;
+                    spi_mosi <= 1'b0;
+                end
+                
+                SPI_START: begin
+                    spi_cs <= 1'b1;  // Assert CS (active high for AT93C46D)
+                    bit_counter <= 5'd0;
+                    spi_mosi <= tx_shift_reg[17]; //added this line
+                end
+                
+                SPI_SEND_CMD: begin
+                    spi_clk <= spi_clk_internal;
+                    if (spi_clk_enable && ~spi_clk_internal) begin
+                        // Setup data on falling edge
+                        if (bit_counter < total_bits)
+                            spi_mosi <= tx_shift_reg[17 - bit_counter]; //ASK ABOUT HERE!!
+                    end else if (spi_clk_enable && spi_clk_internal) begin
+                        // Advance on rising edge
+                        if (bit_counter < total_bits)
+                            bit_counter <= bit_counter + 1'b1;
+                    end 
+                end
+                
+                SPI_READ_DATA: begin
+                    spi_clk <= spi_clk_internal;
+                    if (spi_clk_enable && spi_clk_internal) begin
+                        // Capture data on rising edge
+                        if (bit_counter < 5'd18) begin
+                            rx_shift_reg <= {rx_shift_reg[6:0], spi_miso};
+                            bit_counter <= bit_counter + 1'b1;
+                        end
+                    end
+                end
+                
+                SPI_WRITE_WAIT: begin
+                    spi_cs <= 1'b0;  // Deassert CS during write
+                    spi_clk <= 1'b0;
+                    write_wait_counter <= write_wait_counter + 1'b1;
+                end
+                
+                SPI_COMPLETE: begin
+                    spi_cs <= 1'b0;
+                    spi_clk <= 1'b0;
+                    spi_mosi <= 1'b0;
+                    if (stored_mode == 2'b10) // READ
+                        read_data <= rx_shift_reg;
+                end
+                
+                default: begin
+                    spi_cs <= 1'b0;
+                    spi_clk <= 1'b0;
+                    spi_mosi <= 1'b0;
+                end
+            endcase
+        end
+    end
+    
+    // Output assignments
+    assign leds = stored_address;
+    assign display_data = (stored_mode == 2'b10) ? read_data : stored_data;
+    assign led_busy = (current_spi_state != SPI_IDLE);
+    assign led_ready = (current_input_stage == READY_TO_SEND);
+    assign led_error = (current_spi_state == SPI_ERROR);
+    
+    always_comb begin
+        if(display_select) begin
+            current_digit = display_data[7:4];
+            seg7_anode = 4'b1101;
+         end else begin
+            current_digit = display_data[3:0];
+            seg7_anode=4'b1110;
+            end
+         end
+    assign seg7_display = decode_7seg(current_digit);
+
+endmodule
