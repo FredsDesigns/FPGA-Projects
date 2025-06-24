@@ -344,7 +344,7 @@ module eeprom_spi_controller (
                 SPI_START: begin
                     spi_cs <= 1'b1;  // Assert CS (active high for AT93C46D)
                     bit_counter <= 5'd0;
-                    spi_mosi <= tx_shift_reg[17]; //added this line
+                    spi_mosi <= tx_shift_reg[17]; //Initialize mosi line with first bit
                 end
                 
                 SPI_SEND_CMD: begin
@@ -352,7 +352,7 @@ module eeprom_spi_controller (
                     if (spi_clk_enable && ~spi_clk_internal) begin
                         // Setup data on falling edge
                         if (bit_counter < total_bits)
-                            spi_mosi <= tx_shift_reg[17 - bit_counter]; //ASK ABOUT HERE!!
+                            spi_mosi <= tx_shift_reg[17 - bit_counter]; 
                     end else if (spi_clk_enable && spi_clk_internal) begin
                         // Advance on rising edge
                         if (bit_counter < total_bits)
